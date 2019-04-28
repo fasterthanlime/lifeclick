@@ -8,6 +8,8 @@ use yew::virtual_dom::vlist::VList;
 use yew::virtual_dom::vnode::VNode;
 use yew::{html, Component, ComponentLink, Html, Renderable, ShouldRender};
 
+use std::collections::HashMap;
+
 mod units;
 use units::*;
 
@@ -60,7 +62,7 @@ struct Model {
     hell: Customer,
     heaven_offset: f64,
 
-    sickle: ItemState,
+    items: HashMap<&'static Item, ItemState>,
 }
 
 enum Msg {
@@ -71,6 +73,10 @@ enum Msg {
     },
     Harvest {
         quantity: Souls,
+    },
+    Purchase {
+        item: &'static Item,
+        quantity: i64,
     },
 }
 
@@ -89,7 +95,7 @@ impl Component for Model {
         let mut interval = IntervalService::new();
         let handle = interval.spawn(Duration::from_millis(1000), link.send_back(|_| Msg::Tick));
 
-        Model {
+        let mut model = Model {
             interval,
             job: Some(Box::new(handle)),
 
@@ -125,14 +131,13 @@ impl Component for Model {
             },
             heaven_offset: 0.0,
 
-            sickle: ItemState {
-                item: Item {
-                    name: "Sickle".to_owned(),
-                    initial_cost: Souls(10),
-                },
-                quantity: 1,
-            },
-        }
+            items: HashMap::new(),
+        };
+
+        let sickle = items::Sickle.instantiate(1);
+        model.items.insert(sickle.item, sickle);
+
+        model
     }
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
@@ -152,6 +157,10 @@ impl Component for Model {
                     cus.given += remitted;
                 }
                 self.souls -= remitted;
+                true
+            }
+            Msg::Purchase { quantity, item } => {
+                log(&format!("purchasing {} {:#?}", quantity, item));
                 true
             }
             Msg::Tick => {
@@ -322,12 +331,15 @@ impl Model {
     fn render_upgrades(&self) -> Html<Self> {
         html! {
             <>
-                { self.render_item(&self.sickle) }
+                {for self.items.values().map(|item| {
+                    self.render_item(item)
+                })}
             </>
         }
     }
 
     fn render_item(&self, item: &ItemState) -> Html<Self> {
+        let ii = item.item;
         html! {
             <div class="notification is-primary",>
                 <div class="subtitle",>
@@ -347,7 +359,7 @@ impl Model {
                         { "Item description goes here" }
                     </p>
                 </div>
-                <a class="button is-inverted is-outlined",>
+                <a class="button is-inverted is-outlined", onclick=|_| Msg::Purchase {quantity: 1, item: ii},>
                     {"Purchase"}
                 </a>
             </div>
@@ -389,7 +401,15 @@ impl Model {
     }
 
     fn souls_per_click(&self) -> Souls {
-        return Souls(self.sickle.quantity());
+        Souls(self.item_quantity(items::Sickle))
+    }
+
+    fn item_quantity(&self, item: Item) -> i64 {
+        if let Some(item) = self.items.get(&item) {
+            item.quantity
+        } else {
+            0
+        }
     }
 }
 

@@ -2,7 +2,7 @@ use num_format::{Locale, ToFormattedString};
 use std::fmt;
 use std::ops;
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy, Debug)]
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Clone, Copy, Debug)]
 pub struct Souls(pub i64);
 
 impl Souls {

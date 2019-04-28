@@ -1,12 +1,25 @@
+#![allow(non_upper_case_globals)]
+
 use super::units::*;
 
+#[derive(Hash, PartialEq, Eq, Debug)]
 pub struct Item {
-    pub name: String,
+    pub name: &'static str,
     pub initial_cost: Souls,
 }
 
+impl Item {
+    pub fn instantiate(&'static self, quantity: i64) -> ItemState {
+        ItemState {
+            item: self,
+            quantity,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ItemState {
-    pub item: Item,
+    pub item: &'static Item,
     pub quantity: i64,
 }
 
@@ -25,3 +38,8 @@ impl ItemState {
         return self.quantity;
     }
 }
+
+pub const Sickle: Item = Item {
+    name: "Sickle",
+    initial_cost: Souls(10),
+};
