@@ -62,7 +62,7 @@ struct Model {
     hell: Customer,
     heaven_offset: f64,
 
-    items: HashMap<&'static Item, ItemState>,
+    items: HashMap<&'static ItemSpec, Item>,
 }
 
 enum Msg {
@@ -75,7 +75,7 @@ enum Msg {
         quantity: Souls,
     },
     Purchase {
-        item: &'static Item,
+        item: &'static ItemSpec,
         quantity: i64,
     },
 }
@@ -134,8 +134,12 @@ impl Component for Model {
             items: HashMap::new(),
         };
 
-        let sickle = items::Sickle.instantiate(1);
-        model.items.insert(sickle.item, sickle);
+        let mut add_item = |spec: &'static ItemSpec, quantity: i64| {
+            let item = spec.instantiate(quantity);
+            model.items.insert(item.spec, item);
+        };
+        add_item(&items::Sickle, 1);
+        add_item(&items::RoboHarvest, 0);
 
         model
     }
@@ -338,8 +342,8 @@ impl Model {
         }
     }
 
-    fn render_item(&self, item: &ItemState) -> Html<Self> {
-        let ii = item.item;
+    fn render_item(&self, item: &Item) -> Html<Self> {
+        let ii = item.spec;
         html! {
             <div class="notification is-primary",>
                 <div class="subtitle",>
@@ -404,7 +408,7 @@ impl Model {
         Souls(self.item_quantity(items::Sickle))
     }
 
-    fn item_quantity(&self, item: Item) -> i64 {
+    fn item_quantity(&self, item: ItemSpec) -> i64 {
         if let Some(item) = self.items.get(&item) {
             item.quantity
         } else {
