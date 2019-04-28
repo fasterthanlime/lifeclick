@@ -8,7 +8,7 @@ use yew::virtual_dom::vlist::VList;
 use yew::virtual_dom::vnode::VNode;
 use yew::{html, Component, ComponentLink, Html, Renderable, ShouldRender};
 
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 mod units;
 use units::*;
@@ -62,7 +62,7 @@ struct Model {
     hell: Customer,
     heaven_offset: f64,
 
-    items: HashMap<&'static ItemSpec, Item>,
+    items: IndexMap<&'static ItemSpec, Item>,
 }
 
 enum Msg {
@@ -132,7 +132,7 @@ impl Component for Model {
             },
             heaven_offset: 0.0,
 
-            items: HashMap::new(),
+            items: IndexMap::new(),
         };
 
         let mut add_item = |spec: &'static ItemSpec, quantity: i64| {
