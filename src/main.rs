@@ -11,6 +11,9 @@ use yew::{html, Component, ComponentLink, Html, Renderable, ShouldRender};
 mod units;
 use units::*;
 
+mod items;
+use items::*;
+
 // ok, ok, I get it
 const DAYS_PER_YEAR: f64 = 365.25;
 const DAYS_PER_TICK: f64 = 31.0;
@@ -56,6 +59,8 @@ struct Model {
     heaven: Customer,
     hell: Customer,
     heaven_offset: f64,
+
+    sickle: ItemState,
 }
 
 enum Msg {
@@ -119,6 +124,14 @@ impl Component for Model {
                 given: Souls(0),
             },
             heaven_offset: 0.0,
+
+            sickle: ItemState {
+                item: Item {
+                    name: "Sickle".to_owned(),
+                    initial_cost: Souls(10),
+                },
+                quantity: 1,
+            },
         }
     }
 
@@ -170,8 +183,6 @@ impl Component for Model {
 
 impl Renderable<Model> for Model {
     fn view(&self) -> Html<Self> {
-        let quantity = Souls(1);
-
         html! {
             <>
                 { self.prelude() }
@@ -179,30 +190,15 @@ impl Renderable<Model> for Model {
                     <div class="container",>
                         <div class="columns",>
                             <div class="column",>
+                                { self.render_souls() }
                                 { self.render_customer(&self.heaven) }
-                            </div>
-                            <div class="column",>
                                 { self.render_customer(&self.hell) }
+                                { self.render_population_stats() }
+                            </div>
+                            <div class="column is-half",>
+                                { self.render_upgrades() }
                             </div>
                         </div>
-                        <div class="box",>
-                            <h1 class="title",>
-                              { format!("{} souls", self.souls) }
-                            </h1>
-
-                            <div class="content",>
-                                <p>
-                                    { format!("You have {} outstanding souls to harvest.", self.due) }
-                                </p>
-                                <p>
-                                    { format!("{} humans expire every {}.", self.deaths_per_tick(), TICK_UNIT) }
-                                </p>
-                            </div>
-                            <a class="button is-primary", onclick=|_| Msg::Harvest{quantity},>
-                                { format!("Harvest") }
-                            </a>
-                        </div>
-                        { self.render_population_stats() }
                     </div>
                 </section>
             </>
@@ -245,9 +241,6 @@ impl Model {
                 <div class="content",>
                     <p>
                         { format!(" You owe {} {} souls.", customer.name, customer.owed) }
-                    </p>
-                    <p>
-                        { format!(" You've given {} souls to {} in total.", customer.given, customer.name) }
                     </p>
                 </div>
                 { self.render_remit_bar(kind) }
@@ -299,6 +292,68 @@ impl Model {
         }
     }
 
+    fn render_souls(&self) -> Html<Self> {
+        let quantity = self.souls_per_click();
+        html! {
+            <div class="box",>
+                <h1 class="title",>
+                { format!("{} souls", self.souls) }
+                </h1>
+
+                <div class="content",>
+                    <p>
+                        { format!("You have {} outstanding souls to harvest.", self.due) }
+                    </p>
+                    <p>
+                        { format!("{} humans expire every {}.", self.deaths_per_tick(), TICK_UNIT) }
+                    </p>
+                    <p>
+                        { format!("Each click harvests up to {} souls", self.souls_per_click()) }
+                    </p>
+                </div>
+
+                <a class="button is-primary", onclick=|_| Msg::Harvest{quantity},>
+                    { format!("Harvest") }
+                </a>
+            </div>
+        }
+    }
+
+    fn render_upgrades(&self) -> Html<Self> {
+        html! {
+            <>
+                { self.render_item(&self.sickle) }
+            </>
+        }
+    }
+
+    fn render_item(&self, item: &ItemState) -> Html<Self> {
+        html! {
+            <div class="notification is-primary",>
+                <div class="subtitle",>
+                    <div class="level",>
+                        <div class="level-left",>
+                            { item.name() }
+                        </div>
+                        <div class="level-right",>
+                            { item.quantity() }
+                        </div>
+                    </div>
+                </div>
+                <div class="content",>
+                    <p>
+                        <strong>{ format!("{} souls", item.cost()) }</strong>
+                        { " — " }
+                        { "Item description goes here" }
+                    </p>
+                </div>
+                <a class="button is-inverted is-outlined",>
+                    {"Purchase"}
+                </a>
+            </div>
+        }
+    }
+
     fn render_population_stats(&self) -> Html<Self> {
         html! {
             <div class="box",>
@@ -331,6 +386,10 @@ impl Model {
             (self.alive.float() / 1000.0 * self.death_rate / DAYS_PER_YEAR * DAYS_PER_TICK).ceil()
                 as i64,
         )
+    }
+
+    fn souls_per_click(&self) -> Souls {
+        return Souls(self.sickle.quantity());
     }
 }
 
