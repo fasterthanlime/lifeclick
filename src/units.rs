@@ -35,9 +35,23 @@ impl ops::Mul for Souls {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
-        let Self(lhs) = self;
-        let Self(rhs) = rhs;
-        Self(lhs * rhs)
+        Self(self.0 * rhs.0)
+    }
+}
+
+impl ops::Add for Souls {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl ops::Sub for Souls {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self {
+        Self(self.0 - rhs.0)
     }
 }
 
@@ -46,6 +60,14 @@ impl ops::Mul<i64> for Souls {
 
     fn mul(self, rhs: i64) -> Souls {
         Souls(self.0 * rhs)
+    }
+}
+
+impl ops::Div<i64> for Souls {
+    type Output = Self;
+
+    fn div(self, rhs: i64) -> Souls {
+        Souls(self.0 / rhs)
     }
 }
 
