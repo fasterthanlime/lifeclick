@@ -75,7 +75,7 @@ enum Msg {
         quantity: Souls,
     },
     Purchase {
-        item: &'static ItemSpec,
+        spec: &'static ItemSpec,
         quantity: i64,
     },
 }
@@ -93,13 +93,12 @@ impl Component for Model {
 
     fn create(_: Self::Properties, mut link: ComponentLink<Self>) -> Self {
         let mut interval = IntervalService::new();
-        let handle = interval.spawn(Duration::from_millis(1000), link.send_back(|_| Msg::Tick));
+        let handle = interval.spawn(Duration::from_millis(100), link.send_back(|_| Msg::Tick));
 
         let mut model = Model {
             interval,
             job: Some(Box::new(handle)),
 
-            alive: 1 * Souls::K,
             due: Souls(0),
             souls: Souls(0),
 
@@ -108,10 +107,12 @@ impl Component for Model {
             // 2019 stats:
             // birth_rate: 18.5,
             // death_rate: 7.8,
+            // alive: 7 * Souls::B,
 
             // Better starting point:
-            birth_rate: 100.0,
-            death_rate: 10.0,
+            birth_rate: 40.0,
+            death_rate: 4.0,
+            alive: Souls(100),
 
             goodness: 0.75,
 
@@ -163,8 +164,17 @@ impl Component for Model {
                 self.souls -= remitted;
                 true
             }
-            Msg::Purchase { quantity, item } => {
-                log(&format!("purchasing {} {:#?}", quantity, item));
+            Msg::Purchase { quantity, spec } => {
+                for i in 0..quantity {
+                    let item = self.items.get_mut(spec).unwrap();
+                    let cost = item.cost();
+
+                    if cost > self.souls {
+                        break;
+                    }
+                    self.souls -= cost;
+                    item.quantity += 1;
+                }
                 true
             }
             Msg::Tick => {
@@ -325,7 +335,7 @@ impl Model {
                     </p>
                 </div>
 
-                <a class="button is-primary", onclick=|_| Msg::Harvest{quantity},>
+                <a class="button is-danger", onclick=|_| Msg::Harvest{quantity},>
                     { format!("Harvest") }
                 </a>
             </div>
@@ -343,9 +353,9 @@ impl Model {
     }
 
     fn render_item(&self, item: &Item) -> Html<Self> {
-        let ii = item.spec;
+        let spec = item.spec;
         html! {
-            <div class="notification is-primary",>
+            <div class="notification is-dark",>
                 <div class="subtitle",>
                     <div class="level",>
                         <div class="level-left",>
@@ -363,7 +373,7 @@ impl Model {
                         { "Item description goes here" }
                     </p>
                 </div>
-                <a class="button is-inverted is-outlined", onclick=|_| Msg::Purchase {quantity: 1, item: ii},>
+                <a class="button is-inverted is-outlined", onclick=|_| Msg::Purchase {quantity: 1, spec},>
                     {"Purchase"}
                 </a>
             </div>

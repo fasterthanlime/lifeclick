@@ -30,7 +30,7 @@ impl Item {
 
     pub fn cost(&self) -> Souls {
         let cost = self.spec.initial_cost.0 as f64;
-        let cost = cost * (1.2f64).powf(self.quantity as f64);
+        let cost = cost * (1.42f64).powf(self.quantity as f64);
         Souls(cost as i64)
     }
 
