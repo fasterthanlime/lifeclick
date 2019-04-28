@@ -165,7 +165,7 @@ impl Component for Model {
                 true
             }
             Msg::Purchase { quantity, spec } => {
-                for i in 0..quantity {
+                for _i in 0..quantity {
                     let item = self.items.get_mut(spec).unwrap();
                     let cost = item.cost();
 
@@ -218,7 +218,7 @@ impl Renderable<Model> for Model {
                                 { self.render_customer(&self.hell) }
                                 { self.render_population_stats() }
                             </div>
-                            <div class="column is-half",>
+                            <div class="column is-two-thirds",>
                                 { self.render_upgrades() }
                             </div>
                         </div>
@@ -258,10 +258,12 @@ impl Model {
 
         html! {
             <div class="box",>
-                <h3 class="title",>
-                    { format!("{} {} ", customer.sign, customer.name) }
-                </h3>
                 <div class="content",>
+                    <p>
+                        <strong>
+                            { format!("{} {} ", customer.sign, customer.name) }
+                        </strong>
+                    </p>
                     <p>
                         { format!(" You owe {} {} souls.", customer.name, customer.owed) }
                     </p>
@@ -319,11 +321,13 @@ impl Model {
         let quantity = self.souls_per_click();
         html! {
             <div class="box",>
-                <h1 class="title",>
-                { format!("{} souls", self.souls) }
-                </h1>
-
                 <div class="content",>
+                    <p>
+                        <strong>
+                            { format!("{} souls", self.souls) }
+                        </strong>
+                    </p>
+
                     <p>
                         { format!("You have {} outstanding souls to harvest.", self.due) }
                     </p>
@@ -335,7 +339,7 @@ impl Model {
                     </p>
                 </div>
 
-                <a class="button is-danger", onclick=|_| Msg::Harvest{quantity},>
+                <a class="button is-danger is-fullwidth", onclick=|_| Msg::Harvest{quantity},>
                     { format!("Harvest") }
                 </a>
             </div>
@@ -353,38 +357,56 @@ impl Model {
     }
 
     fn render_item(&self, item: &Item) -> Html<Self> {
-        let spec = item.spec;
         html! {
             <div class="notification is-dark",>
                 <div class="subtitle",>
                     <div class="level",>
                         <div class="level-left",>
                             { item.name() }
-                        </div>
-                        <div class="level-right",>
-                            { item.quantity() }
+                            { if item.quantity() > 0 {
+                                html! {
+                                    <strong>
+                                        { format!(" x{}", item.quantity()) }
+                                    </strong>
+                                }
+                             } else { empty!() } }
                         </div>
                     </div>
                 </div>
                 <div class="content",>
                     <p>
-                        <strong>{ format!("{} souls", item.cost()) }</strong>
-                        { " — " }
-                        { "Item description goes here" }
+                        { item.spec.desc }
                     </p>
                 </div>
-                <a class="button is-inverted is-outlined", onclick=|_| Msg::Purchase {quantity: 1, spec},>
-                    {"Purchase"}
-                </a>
+                <div class="field has-addons",>
+                    { self.render_item_purchase(item, 1) }
+                    { self.render_item_purchase(item, 10) }
+                    { self.render_item_purchase(item, 100) }
+                </div>
             </div>
+        }
+    }
+
+    fn render_item_purchase(&self, item: &Item, quantity: i64) -> Html<Self> {
+        let spec = item.spec;
+        let cost = item.cost_n(quantity);
+        let disabled = cost > self.souls;
+        html! {
+            <p class="control is-expanded",>
+                <a class="button is-fullwidth", disabled=disabled, onclick=|_| Msg::Purchase {quantity, spec},>
+                    {format!("Buy {} ({} souls)", quantity, cost)}
+                </a>
+            </p>
         }
     }
 
     fn render_population_stats(&self) -> Html<Self> {
         html! {
             <div class="box",>
-                <h1 class="title",>{"World"}</h1>
                 <div class="content",>
+                    <p>
+                        <strong>{"World"}</strong>
+                    </p>
                     <p>
                         { format!("{:.0}% of the population is virtuous.", (self.goodness*100.0)) }
                     </p>
