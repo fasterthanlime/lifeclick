@@ -1,3 +1,4 @@
+use num_format::{Locale, ToFormattedString};
 use std::fmt;
 use std::ops;
 
@@ -100,11 +101,8 @@ impl fmt::Display for Souls {
         } else if n >= Self::M {
             let q = self.float() / Self::M.float();
             write!(f, "{:.2} M", q)
-        } else if n >= Self::K {
-            let q = self.float() / Self::K.float();
-            write!(f, "{:.2} K", q)
         } else {
-            write!(f, "{}", self.0)
+            write!(f, "{}", self.0.to_formatted_string(&Locale::en))
         }
     }
 }

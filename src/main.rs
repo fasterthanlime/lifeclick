@@ -4,6 +4,8 @@ use std::cmp;
 use std::time::Duration;
 use stdweb::*;
 use yew::services::{IntervalService, Task};
+use yew::virtual_dom::vlist::VList;
+use yew::virtual_dom::vnode::VNode;
 use yew::{html, Component, ComponentLink, Html, Renderable, ShouldRender};
 
 mod units;
@@ -19,6 +21,7 @@ struct Customer {
     name: String,
     sign: String,
     owed: Souls,
+    given: Souls,
 }
 
 #[derive(Clone, Copy)]
@@ -27,8 +30,16 @@ enum CustomerKind {
     Hell,
 }
 
+macro_rules! empty {
+    () => {
+        VNode::from(VList::new())
+    };
+}
+
 struct Model {
+    #[allow(dead_code)]
     interval: IntervalService,
+    #[allow(dead_code)]
     job: Option<Box<Task>>,
 
     alive: Souls,
@@ -44,6 +55,7 @@ struct Model {
 
     heaven: Customer,
     hell: Customer,
+    heaven_offset: f64,
 }
 
 enum Msg {
@@ -57,6 +69,7 @@ enum Msg {
     },
 }
 
+#[allow(dead_code)]
 fn log(msg: &str) {
     js! { console.log(@{msg}) }
 }
@@ -75,29 +88,37 @@ impl Component for Model {
             interval,
             job: Some(Box::new(handle)),
 
-            alive: 1 * Souls::M,
+            alive: 1 * Souls::K,
             due: Souls(0),
             souls: Souls(0),
 
             month: 0,
 
-            birth_rate: 18.5,
-            death_rate: 7.8,
+            // 2019 stats:
+            // birth_rate: 18.5,
+            // death_rate: 7.8,
 
-            goodness: 0.9,
+            // Better starting point:
+            birth_rate: 100.0,
+            death_rate: 10.0,
+
+            goodness: 0.75,
 
             heaven: Customer {
                 kind: CustomerKind::Heaven,
                 name: "Heaven".to_owned(),
                 sign: "✝️".to_owned(),
                 owed: Souls(0),
+                given: Souls(0),
             },
             hell: Customer {
                 kind: CustomerKind::Hell,
                 name: "Hell".to_owned(),
                 sign: "⛧️".to_owned(),
                 owed: Souls(0),
+                given: Souls(0),
             },
+            heaven_offset: 0.0,
         }
     }
 
@@ -111,12 +132,25 @@ impl Component for Model {
                 true
             }
             Msg::Remit { quantity, target } => {
-                self.customer(target).owed -= quantity;
+                let remitted = cmp::min(self.souls, quantity);
+                {
+                    let cus = self.customer_mut(target);
+                    cus.owed -= remitted;
+                    cus.given += remitted;
+                }
+                self.souls -= remitted;
                 true
             }
             Msg::Tick => {
                 let deaths = self.deaths_per_tick();
-                let heaven_deaths = Souls((deaths.float() * self.goodness).ceil() as i64);
+                let heaven_float = deaths.float() * self.goodness;
+                let heaven_ceil = heaven_float.ceil();
+                self.heaven_offset += heaven_ceil - heaven_float;
+                let mut heaven_deaths = Souls(heaven_ceil as i64);
+                if self.heaven_offset >= 1.0 {
+                    heaven_deaths -= Souls(self.heaven_offset as i64);
+                    self.heaven_offset -= self.heaven_offset.floor();
+                }
                 let hell_deaths = deaths - heaven_deaths;
 
                 self.hell.owed += hell_deaths;
@@ -158,14 +192,14 @@ impl Renderable<Model> for Model {
 
                             <div class="content",>
                                 <p>
-                                    { format!("The existence of {} humans is past due.", self.due) }
+                                    { format!("You have {} outstanding souls to harvest.", self.due) }
                                 </p>
                                 <p>
-                                    { format!("{} humans expire every {}", self.deaths_per_tick(), TICK_UNIT) }
+                                    { format!("{} humans expire every {}.", self.deaths_per_tick(), TICK_UNIT) }
                                 </p>
                             </div>
                             <a class="button is-primary", onclick=|_| Msg::Harvest{quantity},>
-                                { format!("Harvest {}", quantity) }
+                                { format!("Harvest") }
                             </a>
                         </div>
                         { self.render_population_stats() }
@@ -177,7 +211,14 @@ impl Renderable<Model> for Model {
 }
 
 impl Model {
-    fn customer<'a>(&'a mut self, kind: CustomerKind) -> &'a mut Customer {
+    fn customer<'a>(&'a self, kind: CustomerKind) -> &'a Customer {
+        match kind {
+            CustomerKind::Heaven => &self.heaven,
+            CustomerKind::Hell => &self.hell,
+        }
+    }
+
+    fn customer_mut<'a>(&'a mut self, kind: CustomerKind) -> &'a mut Customer {
         match kind {
             CustomerKind::Heaven => &mut self.heaven,
             CustomerKind::Hell => &mut self.hell,
@@ -203,23 +244,56 @@ impl Model {
                 </h3>
                 <div class="content",>
                     <p>
-                        { format!(" You owe {} {} souls", customer.name, customer.owed) }
+                        { format!(" You owe {} {} souls.", customer.name, customer.owed) }
+                    </p>
+                    <p>
+                        { format!(" You've given {} souls to {} in total.", customer.given, customer.name) }
                     </p>
                 </div>
-                <div class="field has-addons",>
-                    { self.render_remit(kind, Souls(1)) }
-                    { self.render_remit(kind, Souls(10)) }
-                    { self.render_remit(kind, Souls(100)) }
-                </div>
+                { self.render_remit_bar(kind) }
             </div>
         }
     }
 
-    fn render_remit(&self, kind: CustomerKind, remit_quantity: Souls) -> Html<Self> {
+    fn render_remit_bar(&self, kind: CustomerKind) -> Html<Self> {
+        let customer = self.customer(kind);
+        let payable = cmp::min(self.souls, customer.owed);
+        let unit_quantity = cmp::min(Souls(1), payable);
+        let quart_quantity = payable / 4;
+        let max_quantity = payable;
+
+        if payable.0 == 0 {
+            return html! {
+                <div class="field has-addons",>
+                    <p class="control is-expanded",>
+                        <a class="button is-fullwidth is-static",>
+                            {"Can't remit"}
+                        </a>
+                    </p>
+                </div>
+            };
+        }
+
+        html! {
+            <>
+                <div class="field has-addons",>
+                    { self.render_remit(kind, unit_quantity) }
+                    { self.render_remit(kind, quart_quantity) }
+                    { self.render_remit(kind, max_quantity) }
+                </div>
+            </>
+        }
+    }
+
+    fn render_remit(&self, kind: CustomerKind, quantity: Souls) -> Html<Self> {
+        if quantity.0 == 0 {
+            return empty!();
+        }
+
         html! {
             <p class="control is-expanded",>
-                <a class="button is-dark is-fullwidth", onclick=|_| Msg::Remit{quantity: Souls(1), target: kind},>
-                    { format!("Remit {}", remit_quantity) }
+                <a class="button is-fullwidth", onclick=|_| Msg::Remit{quantity, target: kind},>
+                    { format!("Remit {}", quantity) }
                 </a>
             </p>
         }
@@ -238,7 +312,7 @@ impl Model {
                         { format!("There are {} humans alive right now.", self.alive) }
                     </p>
                     <p>
-                        { format!("{} humans are born every {}", self.births_per_tick(), TICK_UNIT) }
+                        { format!("{} humans are born every {}.", self.births_per_tick(), TICK_UNIT) }
                     </p>
                 </div>
             </div>
@@ -254,7 +328,7 @@ impl Model {
 
     fn deaths_per_tick(&self) -> Souls {
         Souls(
-            (self.alive.float() / 1000.0 * self.death_rate / DAYS_PER_YEAR * DAYS_PER_TICK).floor()
+            (self.alive.float() / 1000.0 * self.death_rate / DAYS_PER_YEAR * DAYS_PER_TICK).ceil()
                 as i64,
         )
     }
