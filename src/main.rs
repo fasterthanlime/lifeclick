@@ -111,8 +111,8 @@ impl Component for Model {
 
             // Better starting point:
             birth_rate: 40.0,
-            death_rate: 4.0,
-            alive: Souls(100),
+            death_rate: 8.0,
+            alive: Souls(1000),
 
             goodness: 0.75,
 
@@ -141,6 +141,7 @@ impl Component for Model {
         };
         add_item(&items::Sickle, 1);
         add_item(&items::RoboHarvest, 0);
+        add_item(&items::MechaHarvest, 0);
 
         model
     }
@@ -148,10 +149,7 @@ impl Component for Model {
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
             Msg::Harvest { quantity } => {
-                let harvested = cmp::min(self.alive, cmp::min(self.due, quantity));
-                self.alive -= harvested;
-                self.due -= harvested;
-                self.souls += harvested;
+                self.harvest(quantity);
                 true
             }
             Msg::Remit { quantity, target } => {
@@ -197,6 +195,10 @@ impl Component for Model {
                 self.alive += births;
 
                 self.month += 1;
+
+                // now robo!
+                self.harvest(Souls(self.item_quantity(items::RoboHarvest)));
+                self.harvest(Souls(100 * self.item_quantity(items::MechaHarvest)));
 
                 true
             }
@@ -446,6 +448,13 @@ impl Model {
         } else {
             0
         }
+    }
+
+    fn harvest(&mut self, quantity: Souls) {
+        let harvested = cmp::min(self.alive, cmp::min(self.due, quantity));
+        self.alive -= harvested;
+        self.due -= harvested;
+        self.souls += harvested;
     }
 }
 

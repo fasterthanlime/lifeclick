@@ -67,3 +67,9 @@ pub const RoboHarvest: ItemSpec = ItemSpec {
     desc: "Harvests 1 soul / month",
     initial_cost: Souls(100),
 };
+
+pub const MechaHarvest: ItemSpec = ItemSpec {
+    name: "Mecha Harvest",
+    desc: "Harvests 100 soul / month",
+    initial_cost: Souls(2500),
+};
