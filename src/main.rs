@@ -9,6 +9,7 @@ use yew::virtual_dom::vnode::VNode;
 use yew::{html, Component, ComponentLink, Html, Renderable, ShouldRender};
 
 use indexmap::IndexMap;
+use std::collections::HashSet;
 
 mod units;
 use units::*;
@@ -75,6 +76,7 @@ struct Model {
     heaven_offset: f64,
 
     items: IndexMap<&'static ItemSpec, Item>,
+    revealed_items: HashSet<&'static ItemSpec>,
     events: IndexMap<&'static EventSpec, Event>,
 
     tab: Tab,
@@ -151,6 +153,7 @@ impl Component for Model {
             heaven_offset: 0.0,
 
             items: IndexMap::new(),
+            revealed_items: HashSet::new(),
             events: IndexMap::new(),
 
             tab: Tab::Shop,
@@ -223,6 +226,7 @@ impl Component for Model {
                 self.month += 1;
 
                 self.harvest(self.souls_per_tick());
+                self.update_items_reveal();
 
                 true
             }
@@ -455,8 +459,8 @@ impl Model {
     }
 
     fn render_item(&self, item: &Item) -> Html<Self> {
-        // hide items that are too expensive
-        if self.item_quantity(item.spec) == 0 && self.souls < (item.spec.initial_cost / 2) {
+        if !self.revealed_items.contains(item.spec) {
+            // hide items that are too expensive
             return empty!();
         }
 
@@ -602,6 +606,7 @@ impl Model {
         total
     }
 
+    #[allow(dead_code)]
     fn item_quantity(&self, item: &ItemSpec) -> i64 {
         if let Some(item) = self.items.get(item) {
             item.quantity
@@ -615,6 +620,25 @@ impl Model {
         self.alive -= harvested;
         self.due -= harvested;
         self.souls += harvested;
+    }
+
+    fn update_items_reveal(&mut self) {
+        for item in self.items.values() {
+            if !self.revealed_items.contains(item.spec) {
+                let reveal = {
+                    if item.quantity() > 0 {
+                        true
+                    } else if self.souls >= item.spec.initial_cost / 2 {
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if reveal {
+                    self.revealed_items.insert(item.spec);
+                }
+            }
+        }
     }
 }
 
