@@ -10,14 +10,16 @@ use yew::{html, Component, ComponentLink, Html, Renderable, ShouldRender};
 
 use indexmap::IndexMap;
 
+mod idgen;
+
 mod units;
 use units::*;
 
 mod items;
-use items::*;
+use items::{Item, ItemCategory, ItemSpec};
 
 mod events;
-use events::*;
+use events::{Event, EventSpec};
 
 // ok, ok, I get it
 const DAYS_PER_YEAR: f64 = 365.25;
@@ -28,7 +30,6 @@ struct Customer {
     kind: CustomerKind,
     name: String,
     sign: String,
-    owed: Souls,
     given: Souls,
 }
 
@@ -41,7 +42,6 @@ enum CustomerKind {
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
     Shop,
-    Events,
     Earth,
     Heaven,
     Hell,
@@ -51,6 +51,17 @@ macro_rules! empty {
     () => {
         VNode::from(VList::new())
     };
+}
+
+macro_rules! delta {
+    ($q:expr) => {{
+        let q = $q;
+        if q >= 0.into() {
+            format!("+{}", q)
+        } else {
+            format!("{}", q)
+        }
+    }};
 }
 
 struct Model {
@@ -63,8 +74,8 @@ struct Model {
     due: Souls,
     souls: Souls,
 
-    birth_rate: f64,
-    death_rate: f64,
+    base_birth_rate: f64,
+    base_death_rate: f64,
 
     goodness: f64,
 
@@ -72,12 +83,12 @@ struct Model {
 
     heaven: Customer,
     hell: Customer,
-    heaven_offset: f64,
 
     items: IndexMap<&'static ItemSpec, Item>,
     events: IndexMap<&'static EventSpec, Event>,
 
     tab: Tab,
+    item_category: ItemCategory,
 
     cheat: bool,
 }
@@ -96,6 +107,9 @@ enum Msg {
     FocusTab {
         tab: Tab,
     },
+    FocusItemCategory {
+        category: ItemCategory,
+    },
 }
 
 #[allow(dead_code)]
@@ -111,7 +125,8 @@ impl Component for Model {
 
     fn create(_: Self::Properties, mut link: ComponentLink<Self>) -> Self {
         let mut interval = IntervalService::new();
-        let handle = interval.spawn(Duration::from_millis(150), link.send_back(|_| Msg::Tick));
+        let millis: u64 = if cheat_enabled() { 50 } else { 100 };
+        let handle = interval.spawn(Duration::from_millis(millis), link.send_back(|_| Msg::Tick));
 
         let mut model = Model {
             interval,
@@ -128,9 +143,9 @@ impl Component for Model {
             // alive: 7 * Souls::B,
 
             // Better starting point:
-            birth_rate: 18.5,
-            death_rate: 7.8,
-            alive: 15 * Souls::K,
+            base_birth_rate: 1.0,
+            base_death_rate: 0.1,
+            alive: 120 * Souls::K,
 
             goodness: 1.0,
 
@@ -138,22 +153,20 @@ impl Component for Model {
                 kind: CustomerKind::Heaven,
                 name: "Heaven".to_owned(),
                 sign: "✝️".to_owned(),
-                owed: Souls(0),
                 given: Souls(0),
             },
             hell: Customer {
                 kind: CustomerKind::Hell,
                 name: "Hell".to_owned(),
                 sign: "⛧️".to_owned(),
-                owed: Souls(0),
                 given: Souls(0),
             },
-            heaven_offset: 0.0,
 
             items: IndexMap::new(),
             events: IndexMap::new(),
 
             tab: Tab::Shop,
+            item_category: ItemCategory::Harvest,
 
             cheat: cheat_enabled(),
         };
@@ -163,10 +176,13 @@ impl Component for Model {
             model.items.insert(item.spec, item);
         };
         add_item(&items::Sickle, 1);
-        add_item(&items::Sickle2, 0);
         add_item(&items::Bailiff, 0);
         add_item(&items::CollectionAgency, 0);
         add_item(&items::CollectionMultinational, 0);
+        add_item(&items::SurvivalInstinct, 0);
+        add_item(&items::KillerInstinct, 0);
+        add_item(&items::SoulFission, 0);
+        add_item(&items::PlagueSmall, 0);
 
         model
     }
@@ -181,7 +197,6 @@ impl Component for Model {
                 let remitted = cmp::min(self.souls, quantity);
                 {
                     let cus = self.customer_mut(target);
-                    cus.owed -= remitted;
                     cus.given += remitted;
                 }
                 self.souls -= remitted;
@@ -189,14 +204,18 @@ impl Component for Model {
             }
             Msg::Purchase { quantity, spec } => {
                 for _i in 0..quantity {
-                    let item = self.items.get_mut(spec).unwrap();
-                    let cost = item.cost();
+                    let new_quantity = {
+                        let item = self.items.get_mut(spec).unwrap();
+                        let cost = item.cost();
 
-                    if cost > self.souls {
-                        break;
-                    }
-                    self.souls -= cost;
-                    item.quantity += 1;
+                        if cost > self.souls {
+                            break;
+                        }
+                        self.souls -= cost;
+                        item.quantity += 1;
+                        item.quantity
+                    };
+                    self.apply_buy_effects(spec, new_quantity);
                 }
                 true
             }
@@ -204,21 +223,15 @@ impl Component for Model {
                 self.tab = tab;
                 true
             }
+            Msg::FocusItemCategory { category } => {
+                self.item_category = category;
+                true
+            }
             Msg::Tick => {
                 let deaths = self.deaths_per_tick();
-                let heaven_float = deaths.float() * self.goodness;
-                let heaven_ceil = heaven_float.ceil();
-                self.heaven_offset += heaven_ceil - heaven_float;
-                let mut heaven_deaths = Souls(heaven_ceil as i64);
-                if self.heaven_offset >= 1.0 {
-                    heaven_deaths -= Souls(self.heaven_offset as i64);
-                    self.heaven_offset -= self.heaven_offset.floor();
-                }
-                let hell_deaths = deaths - heaven_deaths;
 
-                self.hell.owed += hell_deaths;
-                self.heaven.owed += heaven_deaths;
                 self.due += deaths;
+                self.alive -= deaths;
 
                 let births = self.births_per_tick();
                 self.alive += births;
@@ -293,7 +306,7 @@ impl Model {
                         </strong>
                     </p>
                     <p>
-                        { format!(" You owe {} {} souls.", customer.name, customer.owed) }
+                        { format!(" You've given {} {} souls.", customer.name, customer.given) }
                     </p>
                 </div>
                 { self.render_remit_bar(kind) }
@@ -303,7 +316,7 @@ impl Model {
 
     fn render_remit_bar(&self, kind: CustomerKind) -> Html<Self> {
         let customer = self.customer(kind);
-        let payable = cmp::min(self.souls, customer.owed);
+        let payable = self.souls;
         let unit_quantity = cmp::min(Souls(1), payable);
         let quart_quantity = payable / 4;
         let max_quantity = payable;
@@ -352,9 +365,6 @@ impl Model {
                 <h1 class="title",>{ format!("{} souls", self.souls) }</h1>
                 <h2 class="subtitle",>{ format!("per month: {}", self.souls_per_tick()) }</h2>
                 <div class="content",>
-                    <p>
-                        { format!("You have {} outstanding souls to harvest.", self.due) }
-                    </p>
                     { if self.cheat {
                         html! {
                             <div class="message",>
@@ -369,7 +379,58 @@ impl Model {
                 <a class="button is-medium is-danger is-fullwidth", onclick=|_| Msg::Harvest,>
                     { format!("Harvest {}", self.souls_per_click()) }
                 </a>
+
+                <div style="min-height: 1em",/>
+
+                <div class="message",>
+                    <div class="message-body",>
+                        <p>
+                            { format!("Population: {} ({} / {})", self.alive, delta!(self.births_per_tick() - self.deaths_per_tick()), TICK_UNIT) }
+                        </p>
+                        <p>
+                            { format!("Corpses: {} ({} / {})", self.due, self.deaths_per_tick(), TICK_UNIT) }
+                        </p>
+                    </div>
+                </div>
+
+                { self.render_extinction() }
+                { self.render_events() }
             </>
+        }
+    }
+
+    fn render_extinction(&self) -> Html<Self> {
+        let delta = self.births_per_tick() - self.deaths_per_tick();
+        if delta < Souls(0) {
+            html! {
+                <div class="message is-danger",>
+                    <div class="message-body",>
+                        <p>
+                            {"Earth population is declining"}
+                        </p>
+                    </div>
+                </div>
+            }
+        } else {
+            empty!()
+        }
+    }
+
+    fn render_events(&self) -> Html<Self> {
+        html! {
+            {for self.events.values().map(|event| {
+                { self.render_event(event) }
+            })}
+        }
+    }
+
+    fn render_event(&self, event: &Event) -> Html<Self> {
+        html! {
+            <div class="message is-info",>
+                <div class="message-body",>
+                    {format!("{:#?}", event.spec)}
+                </div>
+            </div>
         }
     }
 
@@ -378,7 +439,6 @@ impl Model {
             <div class="tabs is-fullwidth",>
                 <ul>
                 { self.render_tab(Tab::Shop) }
-                { self.render_tab(Tab::Events) }
                 { self.render_tab(Tab::Earth) }
                 { self.render_tab(Tab::Heaven) }
                 { self.render_tab(Tab::Hell) }
@@ -390,30 +450,9 @@ impl Model {
     fn render_tab_contents(&self) -> Html<Self> {
         match self.tab {
             Tab::Shop => self.render_shop(),
-            Tab::Events => self.render_events(),
             Tab::Earth => self.render_earth(),
             Tab::Heaven => self.render_customer(&self.heaven),
             Tab::Hell => self.render_customer(&self.hell),
-        }
-    }
-
-    fn render_events(&self) -> Html<Self> {
-        if self.events.is_empty() {
-            return html! {
-                <div class="content",>
-                    <p>
-                        {"Not much going on here, earth is spinning as usual."}
-                    </p>
-                </div>
-            };
-        }
-
-        html! {
-            {for self.events.values().map(|event| {
-                html! {
-                    { format!("{:#?}", event) }
-                }
-            })}
         }
     }
 
@@ -423,29 +462,19 @@ impl Model {
             class = "is-active"
         }
 
-        if tab == Tab::Hell && self.hell.owed.0 == 0 {
-            return empty!();
-        }
-
         html! {
             <li class=class,><a onclick=|_| Msg::FocusTab {tab},>{
                 match tab {
                     Tab::Shop => html! {
                         {"Shop"}
                     },
-                    Tab::Events => html! {
-                        {"Events"}
-                    },
                     Tab::Earth => html! {
-                        // {format!("Earth ({})", self.alive)}
                         {"Earth"}
                     },
                     Tab::Heaven => html! {
-                        // {format!("Heaven ({})", self.heaven.owed)}
                         {"Heaven"}
                     },
                     Tab::Hell => html! {
-                        // {format!("Hell ({})", self.hell.owed)}
                         {"Hell"}
                     },
                 }
@@ -453,13 +482,40 @@ impl Model {
         }
     }
 
+    fn render_shop_menu_category(&self, category: ItemCategory) -> Html<Self> {
+        let class = if self.item_category == category {
+            "is-active"
+        } else {
+            ""
+        };
+
+        html! {
+            <li>
+                <a class=class, onclick=|_| Msg::FocusItemCategory {category},>
+                    { format!("{:#?}", category) }
+                </a>
+            </li>
+        }
+    }
+
     fn render_shop(&self) -> Html<Self> {
         html! {
-            <>
-                {for self.items.values().filter(|item| item.revealed).map(|item| {
-                    self.render_item(item)
-                })}
-            </>
+            <div class="columns",>
+                <div class="column is-one-quarter",>
+                    <div class="menu",>
+                        <ul class="menu-list",>
+                            { self.render_shop_menu_category(ItemCategory::Harvest) }
+                            { self.render_shop_menu_category(ItemCategory::Initiative) }
+                            { self.render_shop_menu_category(ItemCategory::Event) }
+                        </ul>
+                    </div>
+                </div>
+                <div class="column",>
+                    {for self.items.values().filter(|item| item.revealed && item.spec.category == self.item_category).map(|item| {
+                        self.render_item(item)
+                    })}
+                </div>
+            </div>
         }
     }
 
@@ -470,7 +526,7 @@ impl Model {
                     <div class="level",>
                         <div class="level-left",>
                             { item.name() }
-                            { format!(" x{}", item.quantity()) }
+                            { self.render_item_quantity(item) }
                         </div>
                     </div>
                 </div>
@@ -478,13 +534,51 @@ impl Model {
                     { self.render_item_desc(item) }
                     { self.render_item_souls_per_click(item) }
                     { self.render_item_souls_per_tick(item) }
+                    { self.render_item_birth_rate(item) }
+                    { self.render_item_death_rate(item) }
                 </div>
+                { self.render_item_buybar(item) }
+            </div>
+        }
+    }
+
+    fn render_item_quantity(&self, item: &Item) -> Html<Self> {
+        if item.spec.unique {
+            return empty!();
+        }
+
+        html! {
+            { format!(" x{}", item.quantity()) }
+        }
+    }
+
+    fn render_item_buybar(&self, item: &Item) -> Html<Self> {
+        if item.spec.unique {
+            if item.quantity() > 0 {
+                html! {
+                    <div class="field has-addons",>
+                        <p class="control is-expanded",>
+                            <a class="button is-static is-fullwidth",>
+                                {"Bought"}
+                            </a>
+                        </p>
+                    </div>
+                }
+            } else {
+                html! {
+                    <div class="field has-addons",>
+                        { self.render_item_purchase(item, 1) }
+                    </div>
+                }
+            }
+        } else {
+            html! {
                 <div class="field has-addons",>
                     { self.render_item_purchase(item, 1) }
                     { self.render_item_purchase(item, 10) }
                     { self.render_item_purchase(item, 100) }
                 </div>
-            </div>
+            }
         }
     }
 
@@ -537,6 +631,34 @@ impl Model {
         }
     }
 
+    fn render_item_birth_rate(&self, item: &Item) -> Html<Self> {
+        let spec = item.spec;
+
+        if let Some(q) = spec.birth_rate_modifier {
+            html! {
+                <p>
+                    { format!("Effect: Birth rate {}%", delta!((q*100.0) as i64)) }
+                </p>
+            }
+        } else {
+            empty!()
+        }
+    }
+
+    fn render_item_death_rate(&self, item: &Item) -> Html<Self> {
+        let spec = item.spec;
+
+        if let Some(q) = spec.death_rate_modifier {
+            html! {
+                <p>
+                    { format!("Effect: Death rate {}%", delta!((q*100.0) as i64)) }
+                </p>
+            }
+        } else {
+            empty!()
+        }
+    }
+
     fn render_item_purchase(&self, item: &Item, quantity: i64) -> Html<Self> {
         let spec = item.spec;
         let cost = item.cost_n(quantity);
@@ -565,27 +687,51 @@ impl Model {
                         { format!("There are {} humans alive right now.", self.alive) }
                     </p>
                     <p>
-                        { format!("{} humans are born every {}. (Rate: {:.2} / year / 1000 population)", self.births_per_tick(), TICK_UNIT, self.birth_rate) }
+                        { format!("{} humans are born every {}. (Rate: {:.2} / year / 1000 population)", self.births_per_tick(), TICK_UNIT, self.effective_birth_rate()) }
                     </p>
                     <p>
-                        { format!("{} humans expire every {}. (Rate {:.2} / year / 1000 population)", self.deaths_per_tick(), TICK_UNIT, self.death_rate) }
+                        { format!("{} humans expire every {}. (Rate {:.2} / year / 1000 population)", self.deaths_per_tick(), TICK_UNIT, self.effective_death_rate()) }
                     </p>
                 </div>
             </>
         }
     }
 
+    fn effective_birth_rate(&self) -> f64 {
+        let base = self.base_birth_rate;
+        let mut factor = 1.0;
+        for item in self.items.values() {
+            if let Some(q) = item.spec.birth_rate_modifier {
+                factor += q * item.quantity() as f64;
+            }
+        }
+        base * factor
+    }
+
+    fn effective_death_rate(&self) -> f64 {
+        let base = self.base_death_rate;
+        let mut factor = 1.0;
+        for item in self.items.values() {
+            if let Some(q) = item.spec.death_rate_modifier {
+                factor += q * item.quantity() as f64;
+            }
+        }
+        base * factor
+    }
+
     fn births_per_tick(&self) -> Souls {
         Souls(
-            (self.alive.float() / 1000.0 * self.birth_rate / DAYS_PER_YEAR * DAYS_PER_TICK).ceil()
-                as i64,
+            (self.alive.float() / 1000.0 * self.effective_birth_rate() / DAYS_PER_YEAR
+                * DAYS_PER_TICK)
+                .ceil() as i64,
         )
     }
 
     fn deaths_per_tick(&self) -> Souls {
         Souls(
-            (self.alive.float() / 1000.0 * self.death_rate / DAYS_PER_YEAR * DAYS_PER_TICK).ceil()
-                as i64,
+            (self.alive.float() / 1000.0 * self.effective_death_rate() / DAYS_PER_YEAR
+                * DAYS_PER_TICK)
+                .ceil() as i64,
         )
     }
 
@@ -624,7 +770,6 @@ impl Model {
 
     fn harvest(&mut self, quantity: Souls) {
         let harvested = cmp::min(self.alive, cmp::min(self.due, quantity));
-        self.alive -= harvested;
         self.due -= harvested;
         self.souls += harvested;
     }
@@ -642,6 +787,24 @@ impl Model {
                     }
                 };
             }
+        }
+    }
+
+    fn apply_buy_effects(&mut self, spec: &ItemSpec, new_quantity: i64) {
+        if let Some(mult) = spec.pop_multiplier {
+            self.alive = Souls(((self.alive.0 as f64) * mult) as i64);
+        }
+        if let Some(r) = spec.pop_kill_ratio {
+            let deaths = Souls(((self.alive.0 as f64) * r) as i64);
+            self.alive -= deaths;
+            self.due += deaths;
+        }
+
+        if spec.id == items::Bailiff.id && new_quantity == 1 {
+            let ev = events::Event {
+                spec: &events::HelloFromHell,
+            };
+            self.events.insert(ev.spec, ev);
         }
     }
 }
