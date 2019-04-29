@@ -16,6 +16,9 @@ use units::*;
 mod items;
 use items::*;
 
+mod events;
+use events::*;
+
 // ok, ok, I get it
 const DAYS_PER_YEAR: f64 = 365.25;
 const DAYS_PER_TICK: f64 = 31.0;
@@ -72,6 +75,7 @@ struct Model {
     heaven_offset: f64,
 
     items: IndexMap<&'static ItemSpec, Item>,
+    events: IndexMap<&'static EventSpec, Event>,
 
     tab: Tab,
 }
@@ -107,7 +111,7 @@ impl Component for Model {
 
     fn create(_: Self::Properties, mut link: ComponentLink<Self>) -> Self {
         let mut interval = IntervalService::new();
-        let handle = interval.spawn(Duration::from_millis(250), link.send_back(|_| Msg::Tick));
+        let handle = interval.spawn(Duration::from_millis(150), link.send_back(|_| Msg::Tick));
 
         let mut model = Model {
             interval,
@@ -128,7 +132,7 @@ impl Component for Model {
             death_rate: 7.8,
             alive: 15 * Souls::K,
 
-            goodness: 0.75,
+            goodness: 1.0,
 
             heaven: Customer {
                 kind: CustomerKind::Heaven,
@@ -147,6 +151,7 @@ impl Component for Model {
             heaven_offset: 0.0,
 
             items: IndexMap::new(),
+            events: IndexMap::new(),
 
             tab: Tab::Shop,
         };
@@ -156,6 +161,7 @@ impl Component for Model {
             model.items.insert(item.spec, item);
         };
         add_item(&items::Sickle, 1);
+        add_item(&items::Sickle2, 0);
         add_item(&items::RoboHarvest, 0);
         add_item(&items::MechaHarvest, 0);
 
@@ -216,9 +222,7 @@ impl Component for Model {
 
                 self.month += 1;
 
-                // now robo!
-                self.harvest(Souls(self.item_quantity(items::RoboHarvest)));
-                self.harvest(Souls(100 * self.item_quantity(items::MechaHarvest)));
+                self.harvest(self.souls_per_tick());
 
                 true
             }
@@ -235,7 +239,6 @@ impl Renderable<Model> for Model {
                     <div class="container",>
                         <div class="columns",>
                             <div class="column",>
-                                <h1 class="title",>{"Death, Inc."}</h1>
                                 { self.render_souls() }
                             </div>
                             <div class="column is-two-thirds",>
@@ -340,15 +343,12 @@ impl Model {
 
     fn render_souls(&self) -> Html<Self> {
         let quantity = self.souls_per_click();
+        js! { document.title = @{format!("{} souls - Death Inc.", self.souls)} }
         html! {
             <>
+                <h1 class="title",>{ format!("{} souls", self.souls) }</h1>
+                <h2 class="subtitle",>{ format!("per month: {}", self.souls_per_tick()) }</h2>
                 <div class="content",>
-                    <p>
-                        <strong>
-                            { format!("{} souls", self.souls) }
-                        </strong>
-                    </p>
-
                     <p>
                         { format!("You have {} outstanding souls to harvest.", self.due) }
                     </p>
@@ -384,11 +384,30 @@ impl Model {
     fn render_tab_contents(&self) -> Html<Self> {
         match self.tab {
             Tab::Shop => self.render_shop(),
-            Tab::Events => html! { {"TODO"} },
+            Tab::Events => self.render_events(),
             Tab::Earth => self.render_earth(),
             Tab::Heaven => self.render_customer(&self.heaven),
             Tab::Hell => self.render_customer(&self.hell),
-            _ => html! { {"stub"} },
+        }
+    }
+
+    fn render_events(&self) -> Html<Self> {
+        if self.events.is_empty() {
+            return html! {
+                <div class="content",>
+                    <p>
+                        {"Not much going on here, earth is spinning as usual."}
+                    </p>
+                </div>
+            };
+        }
+
+        html! {
+            {for self.events.values().map(|event| {
+                html! {
+                    { format!("{:#?}", event) }
+                }
+            })}
         }
     }
 
@@ -396,6 +415,10 @@ impl Model {
         let mut class = "";
         if self.tab == tab {
             class = "is-active"
+        }
+
+        if tab == Tab::Hell && self.hell.owed.0 == 0 {
+            return empty!();
         }
 
         html! {
@@ -432,6 +455,11 @@ impl Model {
     }
 
     fn render_item(&self, item: &Item) -> Html<Self> {
+        // hide items that are too expensive
+        if self.item_quantity(item.spec) == 0 && self.souls < (item.spec.initial_cost / 2) {
+            return empty!();
+        }
+
         html! {
             <div class="box",>
                 <div class="subtitle",>
@@ -443,9 +471,9 @@ impl Model {
                     </div>
                 </div>
                 <div class="content",>
-                    <p>
-                        { item.spec.desc }
-                    </p>
+                    { self.render_item_desc(item) }
+                    { self.render_item_souls_per_click(item) }
+                    { self.render_item_souls_per_tick(item) }
                 </div>
                 <div class="field has-addons",>
                     { self.render_item_purchase(item, 1) }
@@ -453,6 +481,55 @@ impl Model {
                     { self.render_item_purchase(item, 100) }
                 </div>
             </div>
+        }
+    }
+
+    fn render_item_desc(&self, item: &Item) -> Html<Self> {
+        let spec = item.spec;
+        if spec.desc == "" {
+            return empty!();
+        }
+
+        html! {
+            <p>{ spec.desc }</p>
+        }
+    }
+
+    fn render_item_souls_per_click(&self, item: &Item) -> Html<Self> {
+        let spec = item.spec;
+
+        if let Some(q) = spec.souls_per_click {
+            html! {
+                <p>
+                    { format!("Harvests {} souls / click. ", q) }
+                    { if item.quantity() > 0 {
+                        html! {
+                            { format!("(Contributes {} SpC)", q*Souls(item.quantity())) }
+                        }
+                    } else { empty!() } }
+                </p>
+            }
+        } else {
+            empty!()
+        }
+    }
+
+    fn render_item_souls_per_tick(&self, item: &Item) -> Html<Self> {
+        let spec = item.spec;
+
+        if let Some(q) = spec.souls_per_tick {
+            html! {
+                <p>
+                    { format!("Harvests {} souls / {}.", q, TICK_UNIT) }
+                    { if item.quantity() > 0 {
+                        html! {
+                            { format!("(Contributes {} SpM)", q*Souls(item.quantity())) }
+                        }
+                    } else { empty!() } }
+                </p>
+            }
+        } else {
+            empty!()
         }
     }
 
@@ -505,12 +582,28 @@ impl Model {
         )
     }
 
-    fn souls_per_click(&self) -> Souls {
-        Souls(self.item_quantity(items::Sickle))
+    fn souls_per_tick(&self) -> Souls {
+        let mut total = Souls(0);
+        for item in self.items.values() {
+            if let Some(q) = item.spec.souls_per_tick {
+                total += Souls(item.quantity) * q;
+            }
+        }
+        total
     }
 
-    fn item_quantity(&self, item: ItemSpec) -> i64 {
-        if let Some(item) = self.items.get(&item) {
+    fn souls_per_click(&self) -> Souls {
+        let mut total = Souls(0);
+        for item in self.items.values() {
+            if let Some(q) = item.spec.souls_per_click {
+                total += Souls(item.quantity) * q;
+            }
+        }
+        total
+    }
+
+    fn item_quantity(&self, item: &ItemSpec) -> i64 {
+        if let Some(item) = self.items.get(item) {
             item.quantity
         } else {
             0

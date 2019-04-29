@@ -9,6 +9,7 @@ impl Souls {
     pub const K: Self = Self(1_000);
     pub const M: Self = Self(1_000_000);
     pub const B: Self = Self(1_000_000_000);
+    pub const T: Self = Self(1_000_000_000_000);
 
     pub fn float(self) -> f64 {
         let Souls(f) = self;
@@ -95,7 +96,10 @@ impl ops::SubAssign for Souls {
 impl fmt::Display for Souls {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let n = *self;
-        if n >= Self::B {
+        if n >= Self::T {
+            let q = self.float() / Self::T.float();
+            write!(f, "{:.2} T", q)
+        } else if n >= Self::B {
             let q = self.float() / Self::B.float();
             write!(f, "{:.2} B", q)
         } else if n >= Self::M {
