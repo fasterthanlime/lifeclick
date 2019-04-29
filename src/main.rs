@@ -35,6 +35,15 @@ enum CustomerKind {
     Hell,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Tab {
+    Shop,
+    Events,
+    Earth,
+    Heaven,
+    Hell,
+}
+
 macro_rules! empty {
     () => {
         VNode::from(VList::new())
@@ -63,6 +72,8 @@ struct Model {
     heaven_offset: f64,
 
     items: IndexMap<&'static ItemSpec, Item>,
+
+    tab: Tab,
 }
 
 enum Msg {
@@ -77,6 +88,9 @@ enum Msg {
     Purchase {
         spec: &'static ItemSpec,
         quantity: i64,
+    },
+    FocusTab {
+        tab: Tab,
     },
 }
 
@@ -93,7 +107,7 @@ impl Component for Model {
 
     fn create(_: Self::Properties, mut link: ComponentLink<Self>) -> Self {
         let mut interval = IntervalService::new();
-        let handle = interval.spawn(Duration::from_millis(100), link.send_back(|_| Msg::Tick));
+        let handle = interval.spawn(Duration::from_millis(250), link.send_back(|_| Msg::Tick));
 
         let mut model = Model {
             interval,
@@ -110,9 +124,9 @@ impl Component for Model {
             // alive: 7 * Souls::B,
 
             // Better starting point:
-            birth_rate: 40.0,
-            death_rate: 8.0,
-            alive: Souls(1000),
+            birth_rate: 18.5,
+            death_rate: 7.8,
+            alive: 15 * Souls::K,
 
             goodness: 0.75,
 
@@ -133,6 +147,8 @@ impl Component for Model {
             heaven_offset: 0.0,
 
             items: IndexMap::new(),
+
+            tab: Tab::Shop,
         };
 
         let mut add_item = |spec: &'static ItemSpec, quantity: i64| {
@@ -175,6 +191,10 @@ impl Component for Model {
                 }
                 true
             }
+            Msg::FocusTab { tab } => {
+                self.tab = tab;
+                true
+            }
             Msg::Tick => {
                 let deaths = self.deaths_per_tick();
                 let heaven_float = deaths.float() * self.goodness;
@@ -215,13 +235,12 @@ impl Renderable<Model> for Model {
                     <div class="container",>
                         <div class="columns",>
                             <div class="column",>
+                                <h1 class="title",>{"Death, Inc."}</h1>
                                 { self.render_souls() }
-                                { self.render_customer(&self.heaven) }
-                                { self.render_customer(&self.hell) }
-                                { self.render_population_stats() }
                             </div>
                             <div class="column is-two-thirds",>
-                                { self.render_upgrades() }
+                                { self.render_tab_switcher() }
+                                { self.render_tab_contents() }
                             </div>
                         </div>
                     </div>
@@ -259,7 +278,7 @@ impl Model {
         let kind = customer.kind;
 
         html! {
-            <div class="box",>
+            <>
                 <div class="content",>
                     <p>
                         <strong>
@@ -271,7 +290,7 @@ impl Model {
                     </p>
                 </div>
                 { self.render_remit_bar(kind) }
-            </div>
+            </>
         }
     }
 
@@ -322,7 +341,7 @@ impl Model {
     fn render_souls(&self) -> Html<Self> {
         let quantity = self.souls_per_click();
         html! {
-            <div class="box",>
+            <>
                 <div class="content",>
                     <p>
                         <strong>
@@ -341,14 +360,68 @@ impl Model {
                     </p>
                 </div>
 
-                <a class="button is-danger is-fullwidth", onclick=|_| Msg::Harvest{quantity},>
+                <a class="button is-medium is-danger is-fullwidth", onclick=|_| Msg::Harvest{quantity},>
                     { format!("Harvest") }
                 </a>
+            </>
+        }
+    }
+
+    fn render_tab_switcher(&self) -> Html<Self> {
+        html! {
+            <div class="tabs is-fullwidth",>
+                <ul>
+                { self.render_tab(Tab::Shop) }
+                { self.render_tab(Tab::Events) }
+                { self.render_tab(Tab::Earth) }
+                { self.render_tab(Tab::Heaven) }
+                { self.render_tab(Tab::Hell) }
+                </ul>
             </div>
         }
     }
 
-    fn render_upgrades(&self) -> Html<Self> {
+    fn render_tab_contents(&self) -> Html<Self> {
+        match self.tab {
+            Tab::Shop => self.render_shop(),
+            Tab::Events => html! { {"TODO"} },
+            Tab::Earth => self.render_earth(),
+            Tab::Heaven => self.render_customer(&self.heaven),
+            Tab::Hell => self.render_customer(&self.hell),
+            _ => html! { {"stub"} },
+        }
+    }
+
+    fn render_tab(&self, tab: Tab) -> Html<Self> {
+        let mut class = "";
+        if self.tab == tab {
+            class = "is-active"
+        }
+
+        html! {
+            <li class=class,><a onclick=|_| Msg::FocusTab {tab},>{
+                match tab {
+                    Tab::Shop => html! {
+                        {"Shop"}
+                    },
+                    Tab::Events => html! {
+                        {"Events"}
+                    },
+                    Tab::Earth => html! {
+                        {format!("Earth ({})", self.alive)}
+                    },
+                    Tab::Heaven => html! {
+                        {format!("Heaven ({})", self.heaven.owed)}
+                    },
+                    Tab::Hell => html! {
+                        {format!("Hell ({})", self.hell.owed)}
+                    },
+                }
+            }</a></li>
+        }
+    }
+
+    fn render_shop(&self) -> Html<Self> {
         html! {
             <>
                 {for self.items.values().map(|item| {
@@ -360,18 +433,12 @@ impl Model {
 
     fn render_item(&self, item: &Item) -> Html<Self> {
         html! {
-            <div class="notification is-dark",>
+            <div class="box",>
                 <div class="subtitle",>
                     <div class="level",>
                         <div class="level-left",>
                             { item.name() }
-                            { if item.quantity() > 0 {
-                                html! {
-                                    <strong>
-                                        { format!(" x{}", item.quantity()) }
-                                    </strong>
-                                }
-                             } else { empty!() } }
+                            { format!(" x{}", item.quantity()) }
                         </div>
                     </div>
                 </div>
@@ -395,19 +462,19 @@ impl Model {
         let disabled = cost > self.souls;
         html! {
             <p class="control is-expanded",>
-                <a class="button is-fullwidth", disabled=disabled, onclick=|_| Msg::Purchase {quantity, spec},>
+                <a class="button is-danger is-fullwidth", disabled=disabled, onclick=|_| Msg::Purchase {quantity, spec},>
                     {format!("Buy {} ({} souls)", quantity, cost)}
                 </a>
             </p>
         }
     }
 
-    fn render_population_stats(&self) -> Html<Self> {
+    fn render_earth(&self) -> Html<Self> {
         html! {
-            <div class="box",>
+            <>
                 <div class="content",>
                     <p>
-                        <strong>{"World"}</strong>
+                        <strong>{"Earth"}</strong>
                     </p>
                     <p>
                         { format!("{:.0}% of the population is virtuous.", (self.goodness*100.0)) }
@@ -420,7 +487,7 @@ impl Model {
                         { format!("{} humans are born every {}.", self.births_per_tick(), TICK_UNIT) }
                     </p>
                 </div>
-            </div>
+            </>
         }
     }
 
