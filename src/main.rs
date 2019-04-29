@@ -9,7 +9,6 @@ use yew::virtual_dom::vnode::VNode;
 use yew::{html, Component, ComponentLink, Html, Renderable, ShouldRender};
 
 use indexmap::IndexMap;
-use std::collections::HashSet;
 
 mod units;
 use units::*;
@@ -76,10 +75,11 @@ struct Model {
     heaven_offset: f64,
 
     items: IndexMap<&'static ItemSpec, Item>,
-    revealed_items: HashSet<&'static ItemSpec>,
     events: IndexMap<&'static EventSpec, Event>,
 
     tab: Tab,
+
+    cheat: bool,
 }
 
 enum Msg {
@@ -88,9 +88,7 @@ enum Msg {
         quantity: Souls,
         target: CustomerKind,
     },
-    Harvest {
-        quantity: Souls,
-    },
+    Harvest,
     Purchase {
         spec: &'static ItemSpec,
         quantity: i64,
@@ -153,10 +151,11 @@ impl Component for Model {
             heaven_offset: 0.0,
 
             items: IndexMap::new(),
-            revealed_items: HashSet::new(),
             events: IndexMap::new(),
 
             tab: Tab::Shop,
+
+            cheat: cheat_enabled(),
         };
 
         let mut add_item = |spec: &'static ItemSpec, quantity: i64| {
@@ -165,16 +164,17 @@ impl Component for Model {
         };
         add_item(&items::Sickle, 1);
         add_item(&items::Sickle2, 0);
-        add_item(&items::RoboHarvest, 0);
-        add_item(&items::MechaHarvest, 0);
+        add_item(&items::Bailiff, 0);
+        add_item(&items::CollectionAgency, 0);
+        add_item(&items::CollectionMultinational, 0);
 
         model
     }
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
-            Msg::Harvest { quantity } => {
-                self.harvest(quantity);
+            Msg::Harvest => {
+                self.harvest(self.souls_per_click());
                 true
             }
             Msg::Remit { quantity, target } => {
@@ -346,7 +346,6 @@ impl Model {
     }
 
     fn render_souls(&self) -> Html<Self> {
-        let quantity = self.souls_per_click();
         js! { document.title = @{format!("{} souls - Death Inc.", self.souls)} }
         html! {
             <>
@@ -356,16 +355,19 @@ impl Model {
                     <p>
                         { format!("You have {} outstanding souls to harvest.", self.due) }
                     </p>
-                    <p>
-                        { format!("{} humans expire every {}.", self.deaths_per_tick(), TICK_UNIT) }
-                    </p>
-                    <p>
-                        { format!("Each click harvests up to {} souls", self.souls_per_click()) }
-                    </p>
+                    { if self.cheat {
+                        html! {
+                            <div class="message",>
+                                <div class="message-body",>
+                                    {"Cheats are enabled"}
+                                </div>
+                            </div>
+                        }
+                    } else { empty!() } }
                 </div>
 
-                <a class="button is-medium is-danger is-fullwidth", onclick=|_| Msg::Harvest{quantity},>
-                    { format!("Harvest") }
+                <a class="button is-medium is-danger is-fullwidth", onclick=|_| Msg::Harvest,>
+                    { format!("Harvest {}", self.souls_per_click()) }
                 </a>
             </>
         }
@@ -435,13 +437,16 @@ impl Model {
                         {"Events"}
                     },
                     Tab::Earth => html! {
-                        {format!("Earth ({})", self.alive)}
+                        // {format!("Earth ({})", self.alive)}
+                        {"Earth"}
                     },
                     Tab::Heaven => html! {
-                        {format!("Heaven ({})", self.heaven.owed)}
+                        // {format!("Heaven ({})", self.heaven.owed)}
+                        {"Heaven"}
                     },
                     Tab::Hell => html! {
-                        {format!("Hell ({})", self.hell.owed)}
+                        // {format!("Hell ({})", self.hell.owed)}
+                        {"Hell"}
                     },
                 }
             }</a></li>
@@ -451,7 +456,7 @@ impl Model {
     fn render_shop(&self) -> Html<Self> {
         html! {
             <>
-                {for self.items.values().map(|item| {
+                {for self.items.values().filter(|item| item.revealed).map(|item| {
                     self.render_item(item)
                 })}
             </>
@@ -459,11 +464,6 @@ impl Model {
     }
 
     fn render_item(&self, item: &Item) -> Html<Self> {
-        if !self.revealed_items.contains(item.spec) {
-            // hide items that are too expensive
-            return empty!();
-        }
-
         html! {
             <div class="box",>
                 <div class="subtitle",>
@@ -565,7 +565,10 @@ impl Model {
                         { format!("There are {} humans alive right now.", self.alive) }
                     </p>
                     <p>
-                        { format!("{} humans are born every {}.", self.births_per_tick(), TICK_UNIT) }
+                        { format!("{} humans are born every {}. (Rate: {:.2} / year / 1000 population)", self.births_per_tick(), TICK_UNIT, self.birth_rate) }
+                    </p>
+                    <p>
+                        { format!("{} humans expire every {}. (Rate {:.2} / year / 1000 population)", self.deaths_per_tick(), TICK_UNIT, self.death_rate) }
                     </p>
                 </div>
             </>
@@ -597,6 +600,10 @@ impl Model {
     }
 
     fn souls_per_click(&self) -> Souls {
+        if self.cheat {
+            return Souls::B;
+        }
+
         let mut total = Souls(0);
         for item in self.items.values() {
             if let Some(q) = item.spec.souls_per_click {
@@ -623,9 +630,9 @@ impl Model {
     }
 
     fn update_items_reveal(&mut self) {
-        for item in self.items.values() {
-            if !self.revealed_items.contains(item.spec) {
-                let reveal = {
+        for item in self.items.values_mut() {
+            if !item.revealed {
+                item.revealed = {
                     if item.quantity() > 0 {
                         true
                     } else if self.souls >= item.spec.initial_cost / 2 {
@@ -634,11 +641,17 @@ impl Model {
                         false
                     }
                 };
-                if reveal {
-                    self.revealed_items.insert(item.spec);
-                }
             }
         }
+    }
+}
+
+fn cheat_enabled() -> bool {
+    let cheat = js! { return document.location.hash === "#cheat" };
+    if let stdweb::Value::Bool(cheat) = cheat {
+        cheat
+    } else {
+        false
     }
 }
 

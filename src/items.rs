@@ -1,5 +1,4 @@
 #![allow(non_upper_case_globals)]
-#![allow(dead_code)]
 
 use super::units::*;
 
@@ -33,6 +32,7 @@ impl ItemSpec {
         Item {
             spec: self,
             quantity,
+            revealed: quantity > 0,
         }
     }
 
@@ -47,6 +47,7 @@ impl ItemSpec {
 pub struct Item {
     pub spec: &'static ItemSpec,
     pub quantity: i64,
+    pub revealed: bool,
 }
 
 impl Item {
@@ -88,18 +89,25 @@ lazy_static! {
         souls_per_click: Some(Souls(2)),
         ..Default::default()
     };
-    pub static ref RoboHarvest: ItemSpec = ItemSpec {
+    pub static ref Bailiff: ItemSpec = ItemSpec {
         name: "Bailiff",
         desc: "Collecting souls was a logical next career step.",
         initial_cost: Souls(500),
         souls_per_tick: Some(Souls(1)),
         ..Default::default()
     };
-    pub static ref MechaHarvest: ItemSpec = ItemSpec {
+    pub static ref CollectionAgency: ItemSpec = ItemSpec {
         name: "Collection agency",
         desc: "Sharing a coffee machine cuts down costs. It's about the small efficiencies!",
         initial_cost: Souls(5000),
         souls_per_tick: Some(Souls(7)),
+        ..Default::default()
+    };
+    pub static ref CollectionMultinational: ItemSpec = ItemSpec {
+        name: "Collection multinational",
+        desc: "Very efficient at collecting souls",
+        initial_cost: Souls(12000),
+        souls_per_tick: Some(Souls(25)),
         ..Default::default()
     };
 }
