@@ -18,6 +18,9 @@ use units::*;
 mod items;
 use items::{Item, ItemCategory, ItemSpec};
 
+mod upgrades;
+use upgrades::{Upgrade, UpgradeEffect, UpgradeSpec};
+
 mod events;
 use events::{Event, EventSpec};
 
@@ -26,7 +29,7 @@ const DAYS_PER_YEAR: f64 = 365.25;
 const DAYS_PER_TICK: f64 = 31.0;
 const TICK_UNIT: &str = "month";
 
-struct Customer {
+pub struct Customer {
     kind: CustomerKind,
     name: String,
     sign: String,
@@ -34,13 +37,13 @@ struct Customer {
 }
 
 #[derive(Clone, Copy)]
-enum CustomerKind {
+pub enum CustomerKind {
     Heaven,
     Hell,
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Tab {
+pub enum Tab {
     Shop,
     Earth,
     Heaven,
@@ -64,7 +67,15 @@ macro_rules! delta {
     }};
 }
 
-struct Model {
+fn delta_perc(x: f64) -> String {
+    if x >= 0.0 {
+        format!("+{:.0}%", x * 100.0)
+    } else {
+        format!("{:.0}", x * 100.0)
+    }
+}
+
+pub struct Model {
     #[allow(dead_code)]
     interval: IntervalService,
     #[allow(dead_code)]
@@ -85,6 +96,8 @@ struct Model {
     hell: Customer,
 
     items: IndexMap<&'static ItemSpec, Item>,
+    effects: IndexMap<&'static ItemSpec, Vec<&'static UpgradeEffect>>,
+    upgrades: IndexMap<&'static UpgradeSpec, Upgrade>,
     events: IndexMap<&'static EventSpec, Event>,
 
     tab: Tab,
@@ -93,7 +106,7 @@ struct Model {
     cheat: bool,
 }
 
-enum Msg {
+pub enum Msg {
     Tick,
     Remit {
         quantity: Souls,
@@ -109,6 +122,12 @@ enum Msg {
     },
     FocusItemCategory {
         category: ItemCategory,
+    },
+    ConsumeEvent {
+        spec: &'static EventSpec,
+    },
+    PurchaseUpgrade {
+        spec: &'static UpgradeSpec,
     },
 }
 
@@ -128,7 +147,7 @@ impl Component for Model {
         let millis: u64 = if cheat_enabled() { 50 } else { 100 };
         let handle = interval.spawn(Duration::from_millis(millis), link.send_back(|_| Msg::Tick));
 
-        let mut model = Model {
+        let mut m = Model {
             interval,
             job: Some(Box::new(handle)),
 
@@ -143,9 +162,9 @@ impl Component for Model {
             // alive: 7 * Souls::B,
 
             // Better starting point:
-            base_birth_rate: 1.0,
-            base_death_rate: 0.1,
-            alive: 120 * Souls::K,
+            base_birth_rate: 6.0,
+            base_death_rate: 4.0,
+            alive: 800 * Souls::K,
 
             goodness: 1.0,
 
@@ -163,7 +182,9 @@ impl Component for Model {
             },
 
             items: IndexMap::new(),
+            effects: IndexMap::new(),
             events: IndexMap::new(),
+            upgrades: IndexMap::new(),
 
             tab: Tab::Shop,
             item_category: ItemCategory::Harvest,
@@ -171,20 +192,27 @@ impl Component for Model {
             cheat: cheat_enabled(),
         };
 
-        let mut add_item = |spec: &'static ItemSpec, quantity: i64| {
-            let item = spec.instantiate(quantity);
-            model.items.insert(item.spec, item);
-        };
-        add_item(&items::Sickle, 1);
-        add_item(&items::Bailiff, 0);
-        add_item(&items::CollectionAgency, 0);
-        add_item(&items::CollectionMultinational, 0);
-        add_item(&items::SurvivalInstinct, 0);
-        add_item(&items::KillerInstinct, 0);
-        add_item(&items::SoulFission, 0);
-        add_item(&items::PlagueSmall, 0);
+        // items
+        m.add_item(&items::Intern, 0);
+        m.add_item(&items::Bailiff, 0);
+        m.add_item(&items::Banker, 0);
+        m.add_item(&items::Accountant, 0);
+        m.add_item(&items::CollectionAgency, 0);
+        m.add_item(&items::CollectionMultinational, 0);
+        m.add_item(&items::SurvivalInstinct, 0);
+        m.add_item(&items::KillerInstinct, 0);
+        m.add_item(&items::SoulFission, 0);
+        m.add_item(&items::PlagueSmall, 0);
 
-        model
+        // upgrades
+        m.add_upgrade(&upgrades::PaidInterns);
+        m.add_upgrade(&upgrades::InternRaise1);
+        m.add_upgrade(&upgrades::ArmedBailiffs);
+
+        // events
+        m.add_event(&events::Welcome);
+
+        m
     }
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
@@ -228,6 +256,10 @@ impl Component for Model {
                 true
             }
             Msg::Tick => {
+                if self.has_active_events() {
+                    return false;
+                }
+
                 let deaths = self.deaths_per_tick();
 
                 self.due += deaths;
@@ -240,8 +272,29 @@ impl Component for Model {
 
                 self.harvest(self.souls_per_tick());
                 self.update_items_reveal();
+                self.update_upgrades_reveal();
 
                 true
+            }
+            Msg::ConsumeEvent { spec } => {
+                if let Some(ev) = self.events.get_mut(spec) {
+                    ev.consumed = true;
+                }
+                true
+            }
+            Msg::PurchaseUpgrade { spec } => {
+                let mut apply = false;
+                if let Some(up) = self.upgrades.get_mut(spec) {
+                    if !up.bought {
+                        up.bought = true;
+                        apply = true;
+                    }
+                }
+
+                if apply {
+                    self.apply_upgrade(spec);
+                }
+                apply
             }
         }
     }
@@ -271,6 +324,22 @@ impl Renderable<Model> for Model {
 }
 
 impl Model {
+    fn add_item(&mut self, spec: &'static ItemSpec, quantity: i64) {
+        let item = spec.instantiate(quantity);
+        self.items.insert(item.spec, item);
+    }
+
+    fn add_upgrade(&mut self, spec: &'static UpgradeSpec) {
+        let upgrade = spec.instantiate();
+        self.upgrades.insert(upgrade.spec, upgrade);
+    }
+
+    fn add_event(&mut self, spec: &'static EventSpec) {
+        let event = spec.instantiate();
+        self.events.insert(event.spec, event);
+    }
+
+    #[allow(dead_code)]
     fn customer<'a>(&'a self, kind: CustomerKind) -> &'a Customer {
         match kind {
             CustomerKind::Heaven => &self.heaven,
@@ -278,6 +347,7 @@ impl Model {
         }
     }
 
+    #[allow(dead_code)]
     fn customer_mut<'a>(&'a mut self, kind: CustomerKind) -> &'a mut Customer {
         match kind {
             CustomerKind::Heaven => &mut self.heaven,
@@ -288,7 +358,7 @@ impl Model {
     fn prelude(&self) -> Html<Self> {
         html! {
             <>
-                <script defer=true, src="https://use.fontawesome.com/releases/v5.3.1/js/all.js",></script>
+                <script defer=true, src="https://use.fontawesome.com/releases/v5.8.1/js/all.js",></script>
                 <link rel="stylesheet", href="https://cdnjs.cloudflare.com/ajax/libs/bulma/0.7.4/css/bulma.min.css",/>
             </>
         }
@@ -315,7 +385,6 @@ impl Model {
     }
 
     fn render_remit_bar(&self, kind: CustomerKind) -> Html<Self> {
-        let customer = self.customer(kind);
         let payable = self.souls;
         let unit_quantity = cmp::min(Souls(1), payable);
         let quart_quantity = payable / 4;
@@ -418,17 +487,35 @@ impl Model {
 
     fn render_events(&self) -> Html<Self> {
         html! {
-            {for self.events.values().map(|event| {
+            {for self.events.values().filter(|event| !event.consumed).map(|event| {
                 { self.render_event(event) }
             })}
         }
     }
 
     fn render_event(&self, event: &Event) -> Html<Self> {
+        let spec = event.spec;
         html! {
-            <div class="message is-info",>
-                <div class="message-body",>
-                    {format!("{:#?}", event.spec)}
+            <div class="modal is-active",>
+                <div class="modal-background",/>
+                <div class="modal-content",>
+                    <div class="notification is-info",>
+                        <h3 class="title",>{event.spec.name}</h3>
+                        <div class="content",>
+                            <p style="white-space: pre-wrap;",>
+                                {event.spec.desc}
+                            </p>
+
+                            <div class="level",>
+                                <div class="level-left",/>
+                                <div class="level-right",>
+                                    <a class="button is-dark is-inverted is-outlined", onclick=|_| Msg::ConsumeEvent {spec},>
+                                        {"Okay"}
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         }
@@ -482,38 +569,111 @@ impl Model {
         }
     }
 
-    fn render_shop_menu_category(&self, category: ItemCategory) -> Html<Self> {
+    fn render_shop_menu_category(&self, logo: &str, category: ItemCategory) -> Html<Self> {
         let class = if self.item_category == category {
             "is-active"
         } else {
             ""
         };
+        let logo_class = format!("fa fa-{}", logo);
+        let mut count: usize = 0;
+        if category == ItemCategory::Upgrades {
+            count = self.visible_upgrades().count();
+        }
 
         html! {
             <li>
                 <a class=class, onclick=|_| Msg::FocusItemCategory {category},>
-                    { format!("{:#?}", category) }
+                    <i class=logo_class, style="width: 2em; text-align: center",/>
+                    { format!(" {:#?}", category) }
+                    { if count > 0 {
+                        html! {
+                            { format!(" ({})", count) }
+                        }
+                    } else { empty!() } }
                 </a>
             </li>
         }
     }
 
+    fn visible_items<'a>(&'a self, category: ItemCategory) -> impl Iterator<Item = &'a Item> {
+        self.items
+            .values()
+            .filter(move |item| item.revealed && item.spec.category == category)
+    }
+
+    fn visible_upgrades<'a>(&'a self) -> impl Iterator<Item = &'a Upgrade> {
+        self.upgrades
+            .values()
+            .filter(move |up| up.revealed && !up.bought)
+    }
+
     fn render_shop(&self) -> Html<Self> {
         html! {
             <div class="columns",>
+                <div class="column",>
+                    { if self.item_category == ItemCategory::Upgrades {
+                        html! {
+                            {for self.upgrades.values().filter(|u| u.revealed && !u.bought).map(|upgrade| {
+                                self.render_upgrade(upgrade)
+                            })}
+                        }
+
+                    } else {
+                        html! {
+                            <>
+                                { if self.visible_items(self.item_category).next().is_none() {
+                                    html! {
+                                        <p>{"Nothing to buy for now..."}</p>
+                                    }
+                                } else { empty!() } }
+                                {for self.visible_items(self.item_category).map(|item| {
+                                    self.render_item(item)
+                                })}
+                            </>
+                        }
+                    } }
+                </div>
                 <div class="column is-one-quarter",>
                     <div class="menu",>
                         <ul class="menu-list",>
-                            { self.render_shop_menu_category(ItemCategory::Harvest) }
-                            { self.render_shop_menu_category(ItemCategory::Initiative) }
-                            { self.render_shop_menu_category(ItemCategory::Event) }
+                            { self.render_shop_menu_category("ankh", ItemCategory::Harvest) }
+                            { self.render_shop_menu_category("piggy-bank", ItemCategory::Finance) }
+                            { self.render_shop_menu_category("gavel", ItemCategory::Initiatives) }
+                            { self.render_shop_menu_category("cloud-moon", ItemCategory::Events) }
+                            { self.render_shop_menu_category("arrow-alt-circle-up", ItemCategory::Upgrades) }
                         </ul>
                     </div>
                 </div>
-                <div class="column",>
-                    {for self.items.values().filter(|item| item.revealed && item.spec.category == self.item_category).map(|item| {
-                        self.render_item(item)
-                    })}
+            </div>
+        }
+    }
+
+    fn render_upgrade(&self, upgrade: &Upgrade) -> Html<Self> {
+        let spec = upgrade.spec;
+        html! {
+            <div class="box",>
+                <div class="subtitle",>
+                    <div class="level-left",>
+                        { upgrade.spec.name }
+                    </div>
+                </div>
+                <div class="content", style="white-space: pre-wrap",>
+                    { upgrade.spec.desc }
+                </div>
+                    { if upgrade.bought {
+                        html! {
+                            <a class="button", disabled=true,>
+                                {"Bought."}
+                            </a>
+                        }
+                    } else {
+                        html! {
+                            <a class="button", onclick=|_| Msg::PurchaseUpgrade { spec },>
+                                {"Purchase"}
+                            </a>
+                        }
+                    } }
                 </div>
             </div>
         }
@@ -548,13 +708,13 @@ impl Model {
         }
 
         html! {
-            { format!(" x{}", item.quantity()) }
+            { format!(" x{}", item.quantity) }
         }
     }
 
     fn render_item_buybar(&self, item: &Item) -> Html<Self> {
         if item.spec.unique {
-            if item.quantity() > 0 {
+            if item.quantity > 0 {
                 html! {
                     <div class="field has-addons",>
                         <p class="control is-expanded",>
@@ -576,7 +736,7 @@ impl Model {
                 <div class="field has-addons",>
                     { self.render_item_purchase(item, 1) }
                     { self.render_item_purchase(item, 10) }
-                    { self.render_item_purchase(item, 100) }
+                    // { self.render_item_purchase(item, 100) }
                 </div>
             }
         }
@@ -594,17 +754,11 @@ impl Model {
     }
 
     fn render_item_souls_per_click(&self, item: &Item) -> Html<Self> {
-        let spec = item.spec;
-
-        if let Some(q) = spec.souls_per_click {
+        if let Some(x) = item.spec.get_spc(self) {
             html! {
                 <p>
-                    { format!("Harvests {} souls / click. ", q) }
-                    { if item.quantity() > 0 {
-                        html! {
-                            { format!("(Contributes {} SpC)", q*Souls(item.quantity())) }
-                        }
-                    } else { empty!() } }
+                    { format!("Harvests {} souls / click. ", x.effective) }
+                    { format!(" (×{:.3} bonus, contributes {} SpC)", x.bonus, x.multiply(item.quantity)) }
                 </p>
             }
         } else {
@@ -613,17 +767,11 @@ impl Model {
     }
 
     fn render_item_souls_per_tick(&self, item: &Item) -> Html<Self> {
-        let spec = item.spec;
-
-        if let Some(q) = spec.souls_per_tick {
+        if let Some(x) = item.spec.get_spt(self) {
             html! {
                 <p>
-                    { format!("Harvests {} souls / {}.", q, TICK_UNIT) }
-                    { if item.quantity() > 0 {
-                        html! {
-                            { format!("(Contributes {} SpM)", q*Souls(item.quantity())) }
-                        }
-                    } else { empty!() } }
+                    { format!("Harvests {} souls / {}.", x.effective, TICK_UNIT) }
+                    { format!(" (×{:.3} bonus, contributes {} SpM)", x.bonus, x.multiply(item.quantity)) }
                 </p>
             }
         } else {
@@ -634,10 +782,10 @@ impl Model {
     fn render_item_birth_rate(&self, item: &Item) -> Html<Self> {
         let spec = item.spec;
 
-        if let Some(q) = spec.birth_rate_modifier {
+        if let Some(q) = spec.br_mod {
             html! {
                 <p>
-                    { format!("Effect: Birth rate {}%", delta!((q*100.0) as i64)) }
+                    { format!("Effect: Birth rate {}", delta_perc(q)) }
                 </p>
             }
         } else {
@@ -648,10 +796,10 @@ impl Model {
     fn render_item_death_rate(&self, item: &Item) -> Html<Self> {
         let spec = item.spec;
 
-        if let Some(q) = spec.death_rate_modifier {
+        if let Some(q) = spec.dr_mod {
             html! {
                 <p>
-                    { format!("Effect: Death rate {}%", delta!((q*100.0) as i64)) }
+                    { format!("Effect: Death rate {}", delta_perc(q)) }
                 </p>
             }
         } else {
@@ -698,25 +846,21 @@ impl Model {
     }
 
     fn effective_birth_rate(&self) -> f64 {
-        let base = self.base_birth_rate;
-        let mut factor = 1.0;
-        for item in self.items.values() {
-            if let Some(q) = item.spec.birth_rate_modifier {
-                factor += q * item.quantity() as f64;
-            }
-        }
-        base * factor
+        self.base_birth_rate * self.sum_factor(|i| i.spec.br_mod)
     }
 
     fn effective_death_rate(&self) -> f64 {
-        let base = self.base_death_rate;
+        self.base_death_rate * self.sum_factor(|i| i.spec.dr_mod)
+    }
+
+    fn sum_factor(&self, f: fn(item: &Item) -> Option<f64>) -> f64 {
         let mut factor = 1.0;
         for item in self.items.values() {
-            if let Some(q) = item.spec.death_rate_modifier {
-                factor += q * item.quantity() as f64;
+            if let Some(q) = f(item) {
+                factor += q * item.quantity as f64;
             }
         }
-        base * factor
+        factor
     }
 
     fn births_per_tick(&self) -> Souls {
@@ -738,8 +882,8 @@ impl Model {
     fn souls_per_tick(&self) -> Souls {
         let mut total = Souls(0);
         for item in self.items.values() {
-            if let Some(q) = item.spec.souls_per_tick {
-                total += Souls(item.quantity) * q;
+            if let Some(x) = item.spec.get_spt(self) {
+                total += x.multiply(item.quantity);
             }
         }
         total
@@ -750,10 +894,10 @@ impl Model {
             return Souls::B;
         }
 
-        let mut total = Souls(0);
+        let mut total = Souls(1);
         for item in self.items.values() {
-            if let Some(q) = item.spec.souls_per_click {
-                total += Souls(item.quantity) * q;
+            if let Some(x) = item.spec.get_spc(self) {
+                total += x.multiply(item.quantity);
             }
         }
         total
@@ -778,9 +922,23 @@ impl Model {
         for item in self.items.values_mut() {
             if !item.revealed {
                 item.revealed = {
-                    if item.quantity() > 0 {
+                    if item.quantity > 0 {
                         true
-                    } else if self.souls >= item.spec.initial_cost / 2 {
+                    } else if self.souls >= item.spec.cost / 2 {
+                        true
+                    } else {
+                        false
+                    }
+                };
+            }
+        }
+    }
+
+    fn update_upgrades_reveal(&mut self) {
+        for upgrade in self.upgrades.values_mut() {
+            if !upgrade.revealed {
+                upgrade.revealed = {
+                    if self.souls >= upgrade.spec.cost / 2 {
                         true
                     } else {
                         false
@@ -801,10 +959,27 @@ impl Model {
         }
 
         if spec.id == items::Bailiff.id && new_quantity == 1 {
-            let ev = events::Event {
-                spec: &events::HelloFromHell,
-            };
+            let ev = events::HelloFromHell.instantiate();
             self.events.insert(ev.spec, ev);
+        }
+    }
+
+    fn has_active_events(&self) -> bool {
+        self.events
+            .values()
+            .filter(|ev| !ev.consumed)
+            .next()
+            .is_some()
+    }
+
+    fn apply_upgrade(&mut self, spec: &'static UpgradeSpec) {
+        for effect in spec.effects.as_slice() {
+            if !self.effects.contains_key(effect.spec) {
+                self.effects.insert(effect.spec, Vec::new());
+            }
+
+            let list = self.effects.get_mut(effect.spec).unwrap();
+            list.push(effect);
         }
     }
 }
